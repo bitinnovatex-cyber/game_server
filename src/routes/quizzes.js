@@ -210,7 +210,7 @@ router.post('/generate-ai', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Topic or content prompt is required' });
   }
 
-  const numQuestions = Math.min(Math.max(parseInt(count, 10) || 5, 1), 20);
+  const numQuestions = Math.min(Math.max(parseInt(count, 10) || 5, 1), 50);
   const prompt = `You are a quiz master creating an engaging, high-energy live quiz for PS SkillSift.
 Topic/Source Material: "${topic}".
 Generate ${numQuestions} engaging, accurate questions.
