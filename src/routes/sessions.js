@@ -153,10 +153,12 @@ router.post('/launch', requireAuth, async (req, res) => {
     );
 
     const optionsByQ = {};
-    optionsRes.forEach ? optionsRes.rows.forEach(opt => {
-      if (!optionsByQ[opt.question_id]) optionsByQ[opt.question_id] = [];
-      optionsByQ[opt.question_id].push(opt);
-    }) : null;
+    if (optionsRes && optionsRes.rows) {
+      optionsRes.rows.forEach(opt => {
+        if (!optionsByQ[opt.question_id]) optionsByQ[opt.question_id] = [];
+        optionsByQ[opt.question_id].push(opt);
+      });
+    }
 
     questions.forEach(q => {
       q.options = optionsByQ[q.id] || [];

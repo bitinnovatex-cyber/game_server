@@ -80,6 +80,24 @@ io.on('connection', (socket) => {
       score: p.score
     }));
 
+    let currentQData = null;
+    if (game.currentQIndex >= 0 && game.questions[game.currentQIndex]) {
+      const currentQ = game.questions[game.currentQIndex];
+      currentQData = {
+        questionIndex: game.currentQIndex,
+        totalQuestions: game.questions.length,
+        questionText: currentQ.question_text,
+        timeLimit: game.timeLeft,
+        type: currentQ.type,
+        mediaUrl: currentQ.media_url,
+        options: (currentQ.options || []).map((o, idx) => ({
+          id: o.id,
+          option_text: o.option_text,
+          color_index: o.color_index !== undefined ? o.color_index : idx
+        }))
+      };
+    }
+
     if (typeof callback === 'function') {
       callback({
         success: true,
@@ -91,7 +109,10 @@ io.on('connection', (socket) => {
           playerCount: playerList.length,
           players: playerList,
           currentQIndex: game.currentQIndex,
-          totalQuestions: game.questions.length
+          totalQuestions: game.questions.length,
+          currentQuestion: currentQData,
+          timeLeft: game.timeLeft,
+          answeredCount: gameManager.getAnsweredCount(game)
         }
       });
     }

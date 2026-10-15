@@ -419,7 +419,13 @@ class GameManager {
       correctOptionIds,
       correctOptions,
       answerStats: game.answerStats,
-      questionText: currentQ.question_text
+      questionText: currentQ.question_text,
+      options: (currentQ.options || []).map((o, idx) => ({
+        id: o.id,
+        option_text: o.option_text,
+        color_index: o.color_index !== undefined ? o.color_index : idx,
+        is_correct: !!o.is_correct
+      }))
     });
 
     // Send individualized results to each player socket
@@ -433,7 +439,8 @@ class GameManager {
           totalScore: p.score,
           streak: p.streak,
           rank: p.rank,
-          correctOptionIds
+          correctOptionIds,
+          correctOptions: correctOptions.map(o => ({ id: o.id, option_text: o.option_text }))
         });
       }
     });
