@@ -211,7 +211,7 @@ router.post('/generate-ai', requireAuth, async (req, res) => {
   }
 
   const numQuestions = Math.min(Math.max(parseInt(count, 10) || 5, 1), 20);
-  const prompt = `You are a quiz master creating a Kahoot-style quiz.
+  const prompt = `You are a quiz master creating an engaging, high-energy live quiz for PS SkillSift.
 Topic/Source Material: "${topic}".
 Generate ${numQuestions} engaging, accurate questions.
 Question Type: ${type === 'quiz_2' ? 'True/False (2 choices)' : 'Multiple Choice (4 choices)'}.

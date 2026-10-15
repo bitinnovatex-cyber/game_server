@@ -157,7 +157,7 @@ async function startServer() {
     await db.initDb();
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`===============================================`);
-      console.log(`🚀 Kahoot Live Server running on port ${PORT}`);
+      console.log(`🚀 PS SkillSift Live Server running on port ${PORT}`);
       console.log(`🌐 Public / Network address: http://0.0.0.0:${PORT}`);
       console.log(`📡 WebSocket ready for 500+ participants`);
       console.log(`🔐 Admin JWT Auth configured`);

@@ -323,7 +323,7 @@ class GameManager {
 
     if (isCorrect) {
       const timeLimitMs = (currentQ.time_limit || 20) * 1000;
-      // Kahoot-style speed formula: fast answer yields close to full points
+      // PS SkillSift speed formula: fast answer yields close to full points
       const speedFactor = Math.max(0.5, 1 - (timeTakenMs / (timeLimitMs * 2)));
       const basePoints = currentQ.points || 1000;
       pointsAwarded = Math.round(basePoints * speedFactor);

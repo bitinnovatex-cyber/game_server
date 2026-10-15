@@ -1,7 +1,7 @@
 {
   "name": "quiz-server",
   "version": "1.0.0",
-  "description": "Kahoot-like quiz live backend with WebSockets, JWT, Postgres and Gemini AI",
+  "description": "PS SkillSift live backend with WebSockets, JWT, Postgres and Gemini AI",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
