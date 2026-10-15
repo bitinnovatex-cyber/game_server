@@ -51,16 +51,35 @@ async function initDb() {
     // Enable uuid extension if available
     await client.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
 
+    // 0. Users table (Multi-admin & Super Admin accounts)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role VARCHAR(50) DEFAULT 'admin',
+        status VARCHAR(50) DEFAULT 'pending',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
     // 1. Quizzes table
     await client.query(`
       CREATE TABLE IF NOT EXISTS quizzes (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
         title VARCHAR(255) NOT NULL,
         description TEXT,
         cover_image TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
+    `);
+
+    // Ensure user_id column exists on quizzes if table was created previously
+    await client.query(`
+      ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;
     `);
 
     // 2. Questions table
@@ -131,6 +150,9 @@ async function initDb() {
     `);
 
     // Create helpful indices
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_quizzes_user_id ON quizzes(user_id);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_questions_quiz_id ON questions(quiz_id);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_options_question_id ON options(question_id);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_sessions_status ON game_sessions(status);`);

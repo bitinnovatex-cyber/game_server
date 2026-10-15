@@ -41,6 +41,17 @@ class GameManager {
     return this.games.get(sessionId);
   }
 
+  getGameByPin(pin) {
+    if (!pin) return null;
+    const cleanPin = String(pin).trim();
+    for (const game of this.games.values()) {
+      if (game.pin === cleanPin && game.state !== 'podium' && game.state !== 'finished') {
+        return game;
+      }
+    }
+    return null;
+  }
+
   getActiveGame() {
     for (const game of this.games.values()) {
       if (game.state !== 'podium' && game.state !== 'finished') {

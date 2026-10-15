@@ -7,12 +7,27 @@ const router = express.Router();
 // 1. Get all quizzes
 router.get('/', requireAuth, async (req, res) => {
   try {
+    if (req.user.role === 'superadmin') {
+      // Super admin can see all quizzes across all users with creator email
+      const result = await db.query(`
+        SELECT q.*, 
+          COALESCE(u.email, 'Admin') as creator_email,
+          (SELECT COUNT(*)::int FROM questions WHERE quiz_id = q.id) as question_count
+        FROM quizzes q
+        LEFT JOIN users u ON q.user_id = u.id
+        ORDER BY q.updated_at DESC
+      `);
+      return res.json(result.rows);
+    }
+
+    // Standard admin/user can only view their own quizzes
     const result = await db.query(`
       SELECT q.*, 
         (SELECT COUNT(*)::int FROM questions WHERE quiz_id = q.id) as question_count
       FROM quizzes q
+      WHERE q.user_id = $1
       ORDER BY q.updated_at DESC
-    `);
+    `, [req.user.userId]);
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching quizzes:', err);
@@ -24,9 +39,20 @@ router.get('/', requireAuth, async (req, res) => {
 router.get('/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   try {
-    const quizResult = await db.query('SELECT * FROM quizzes WHERE id = $1', [id]);
+    let quizResult;
+    if (req.user.role === 'superadmin') {
+      quizResult = await db.query(`
+        SELECT q.*, COALESCE(u.email, 'Admin') as creator_email 
+        FROM quizzes q 
+        LEFT JOIN users u ON q.user_id = u.id 
+        WHERE q.id = $1
+      `, [id]);
+    } else {
+      quizResult = await db.query('SELECT * FROM quizzes WHERE id = $1 AND user_id = $2', [id, req.user.userId]);
+    }
+
     if (quizResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Quiz not found' });
+      return res.status(404).json({ error: 'Quiz not found or unauthorized' });
     }
 
     const quiz = quizResult.rows[0];
@@ -68,6 +94,10 @@ router.get('/:id', requireAuth, async (req, res) => {
 
 // 3. Create a new quiz with slides
 router.post('/', requireAuth, async (req, res) => {
+  if (req.user.role === 'superadmin') {
+    return res.status(403).json({ error: 'Super Admin has read-only access to quizzes. Please use an Admin account to create quizzes.' });
+  }
+
   const { title, description, cover_image, questions = [] } = req.body;
   if (!title || !title.trim()) {
     return res.status(400).json({ error: 'Title is required' });
@@ -78,9 +108,9 @@ router.post('/', requireAuth, async (req, res) => {
     await client.query('BEGIN');
 
     const quizRes = await client.query(
-      `INSERT INTO quizzes (title, description, cover_image) 
-       VALUES ($1, $2, $3) RETURNING *`,
-      [title.trim(), description || '', cover_image || '']
+      `INSERT INTO quizzes (title, description, cover_image, user_id) 
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [title.trim(), description || '', cover_image || '', req.user.userId]
     );
     const newQuiz = quizRes.rows[0];
 
@@ -126,11 +156,24 @@ router.post('/', requireAuth, async (req, res) => {
 
 // 4. Update an existing quiz with slides
 router.put('/:id', requireAuth, async (req, res) => {
+  if (req.user.role === 'superadmin') {
+    return res.status(403).json({ error: 'Super Admin has read-only access to quizzes.' });
+  }
+
   const { id } = req.params;
   const { title, description, cover_image, questions = [] } = req.body;
 
   if (!title || !title.trim()) {
     return res.status(400).json({ error: 'Title is required' });
+  }
+
+  // Verify ownership
+  const checkOwner = await db.query('SELECT user_id FROM quizzes WHERE id = $1', [id]);
+  if (checkOwner.rows.length === 0) {
+    return res.status(404).json({ error: 'Quiz not found' });
+  }
+  if (checkOwner.rows[0].user_id && checkOwner.rows[0].user_id !== req.user.userId) {
+    return res.status(403).json({ error: 'Unauthorized: You can only edit your own quizzes.' });
   }
 
   const client = await db.pool.connect();
@@ -139,8 +182,8 @@ router.put('/:id', requireAuth, async (req, res) => {
 
     await client.query(
       `UPDATE quizzes SET title = $1, description = $2, cover_image = $3, updated_at = NOW()
-       WHERE id = $4`,
-      [title.trim(), description || '', cover_image || '', id]
+       WHERE id = $4 AND (user_id = $5 OR user_id IS NULL)`,
+      [title.trim(), description || '', cover_image || '', id, req.user.userId]
     );
 
     // Delete old questions (options cascade deleted)
@@ -188,8 +231,20 @@ router.put('/:id', requireAuth, async (req, res) => {
 
 // 5. Delete a quiz
 router.delete('/:id', requireAuth, async (req, res) => {
+  if (req.user.role === 'superadmin') {
+    return res.status(403).json({ error: 'Super Admin has read-only access to quizzes.' });
+  }
+
   const { id } = req.params;
   try {
+    const checkOwner = await db.query('SELECT user_id FROM quizzes WHERE id = $1', [id]);
+    if (checkOwner.rows.length === 0) {
+      return res.status(404).json({ error: 'Quiz not found' });
+    }
+    if (checkOwner.rows[0].user_id && checkOwner.rows[0].user_id !== req.user.userId) {
+      return res.status(403).json({ error: 'Unauthorized: You can only delete your own quizzes.' });
+    }
+
     await db.query('DELETE FROM quizzes WHERE id = $1', [id]);
     res.json({ success: true, message: 'Quiz deleted successfully' });
   } catch (err) {

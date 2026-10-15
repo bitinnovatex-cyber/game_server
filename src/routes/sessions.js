@@ -5,8 +5,65 @@ const gameManager = require('../gameManager');
 
 const router = express.Router();
 
-// 1. PUBLIC: Check if there is an active quiz session currently running
-// Checks in-memory gameManager first for instant 0ms response, with DB fallback
+// 1. PUBLIC: Validate and lookup a live session by its 6-digit PIN
+router.get('/pin/:pin', async (req, res) => {
+  const { pin } = req.params;
+  const cleanPin = (pin || '').trim();
+
+  if (!/^\d{6}$/.test(cleanPin)) {
+    return res.status(400).json({ valid: false, error: 'Please enter a valid 6-digit PIN.' });
+  }
+
+  try {
+    // 1. Check in-memory game engine
+    const memoryGame = gameManager.getGameByPin(cleanPin);
+    if (memoryGame) {
+      return res.json({
+        valid: true,
+        session: {
+          id: memoryGame.id,
+          pin: memoryGame.pin,
+          status: memoryGame.state === 'podium' ? 'finished' : memoryGame.state,
+          quizTitle: memoryGame.quiz?.title || 'Live Quiz',
+          playerCount: memoryGame.players ? memoryGame.players.size : 0
+        }
+      });
+    }
+
+    // 2. Fallback to active DB sessions
+    const result = await db.query(`
+      SELECT s.id, s.pin, s.status,
+             q.title as quiz_title,
+             (SELECT COUNT(*)::int FROM session_players WHERE session_id = s.id) as player_count
+      FROM game_sessions s
+      JOIN quizzes q ON q.id = s.quiz_id
+      WHERE s.pin = $1 AND s.status IN ('lobby', 'active')
+      ORDER BY s.started_at DESC
+      LIMIT 1
+    `, [cleanPin]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ valid: false, error: 'No active quiz found with this PIN. Check the PIN and try again.' });
+    }
+
+    const session = result.rows[0];
+    res.json({
+      valid: true,
+      session: {
+        id: session.id,
+        pin: session.pin,
+        status: session.status,
+        quizTitle: session.quiz_title,
+        playerCount: session.player_count
+      }
+    });
+  } catch (err) {
+    console.error('Error looking up session by PIN:', err.message);
+    res.status(500).json({ valid: false, error: 'Server error checking PIN' });
+  }
+});
+
+// 1.1 PUBLIC: Legacy check if any active quiz exists (kept for compatibility)
 router.get('/active', async (req, res) => {
   try {
     const memoryGame = gameManager.getActiveGame();
@@ -51,23 +108,31 @@ router.get('/active', async (req, res) => {
     });
   } catch (err) {
     console.error('Error checking active session:', err.message);
-    // Don't crash or return 500, gracefully return inactive if DB is sleeping
     res.json({ active: false });
   }
 });
 
 // 2. ADMIN: Launch a new live quiz session
 router.post('/launch', requireAuth, async (req, res) => {
+  if (req.user.role === 'superadmin') {
+    return res.status(403).json({ error: 'Super Admin has read-only access. Please log in with an Admin account to host quizzes.' });
+  }
+
   const { quiz_id } = req.body;
   if (!quiz_id) {
     return res.status(400).json({ error: 'quiz_id is required' });
   }
 
   try {
-    // Check quiz exists and has questions
+    // Check quiz exists and user is owner
     const quizRes = await db.query('SELECT * FROM quizzes WHERE id = $1', [quiz_id]);
     if (quizRes.rows.length === 0) {
       return res.status(404).json({ error: 'Quiz not found' });
+    }
+
+    const quiz = quizRes.rows[0];
+    if (quiz.user_id && quiz.user_id !== req.user.userId) {
+      return res.status(403).json({ error: 'Unauthorized: You can only host your own quizzes.' });
     }
 
     const questionsRes = await db.query(
@@ -88,20 +153,35 @@ router.post('/launch', requireAuth, async (req, res) => {
     );
 
     const optionsByQ = {};
-    optionsRes.rows.forEach(opt => {
+    optionsRes.forEach ? optionsRes.rows.forEach(opt => {
       if (!optionsByQ[opt.question_id]) optionsByQ[opt.question_id] = [];
       optionsByQ[opt.question_id].push(opt);
-    });
+    }) : null;
 
     questions.forEach(q => {
       q.options = optionsByQ[q.id] || [];
     });
 
-    // Close any previous open/lobby sessions
-    await db.query(`UPDATE game_sessions SET status = 'finished', ended_at = NOW() WHERE status IN ('lobby', 'active')`);
+    // Close any previous open session for THIS quiz only (allowing other hosts to run concurrently)
+    await db.query(`UPDATE game_sessions SET status = 'finished', ended_at = NOW() WHERE quiz_id = $1 AND status IN ('lobby', 'active')`, [quiz_id]);
 
-    // Generate 6-digit game PIN
-    const pin = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate unique 6-digit game PIN (non-colliding)
+    let pin = '';
+    let isUnique = false;
+    for (let attempts = 0; attempts < 10; attempts++) {
+      const candidatePin = Math.floor(100000 + Math.random() * 900000).toString();
+      if (!gameManager.getGameByPin(candidatePin)) {
+        const check = await db.query(`SELECT id FROM game_sessions WHERE pin = $1 AND status IN ('lobby', 'active')`, [candidatePin]);
+        if (check.rows.length === 0) {
+          pin = candidatePin;
+          isUnique = true;
+          break;
+        }
+      }
+    }
+    if (!isUnique) {
+      pin = Math.floor(100000 + Math.random() * 900000).toString();
+    }
 
     // Insert new game_session
     const sessionRes = await db.query(
@@ -115,7 +195,7 @@ router.post('/launch', requireAuth, async (req, res) => {
     gameManager.createGame(session.id, {
       id: session.id,
       pin,
-      quiz: quizRes.rows[0],
+      quiz,
       questions
     });
 
@@ -124,7 +204,7 @@ router.post('/launch', requireAuth, async (req, res) => {
       session: {
         id: session.id,
         pin,
-        title: quizRes.rows[0].title,
+        title: quiz.title,
         status: 'lobby'
       }
     });
@@ -150,20 +230,40 @@ router.post('/:id/end', requireAuth, async (req, res) => {
 // 4. ADMIN: Get past session history
 router.get('/history', requireAuth, async (req, res) => {
   try {
-    const result = await db.query(`
-      SELECT s.id, s.pin, s.status, s.started_at, s.ended_at,
-             q.title as quiz_title,
-             COUNT(p.id)::int as total_players,
-             COALESCE(MAX(p.score), 0)::int as top_score,
-             COALESCE(AVG(p.score), 0)::int as avg_score
-      FROM game_sessions s
-      JOIN quizzes q ON q.id = s.quiz_id
-      LEFT JOIN session_players p ON p.session_id = s.id
-      WHERE s.status = 'finished'
-      GROUP BY s.id, q.title
-      ORDER BY s.started_at DESC
-      LIMIT 50
-    `);
+    let result;
+    if (req.user.role === 'superadmin') {
+      result = await db.query(`
+        SELECT s.id, s.pin, s.status, s.started_at, s.ended_at,
+               q.title as quiz_title,
+               COALESCE(u.email, 'Admin') as creator_email,
+               COUNT(p.id)::int as total_players,
+               COALESCE(MAX(p.score), 0)::int as top_score,
+               COALESCE(AVG(p.score), 0)::int as avg_score
+        FROM game_sessions s
+        JOIN quizzes q ON q.id = s.quiz_id
+        LEFT JOIN users u ON q.user_id = u.id
+        LEFT JOIN session_players p ON p.session_id = s.id
+        WHERE s.status = 'finished'
+        GROUP BY s.id, q.title, u.email
+        ORDER BY s.started_at DESC
+        LIMIT 50
+      `);
+    } else {
+      result = await db.query(`
+        SELECT s.id, s.pin, s.status, s.started_at, s.ended_at,
+               q.title as quiz_title,
+               COUNT(p.id)::int as total_players,
+               COALESCE(MAX(p.score), 0)::int as top_score,
+               COALESCE(AVG(p.score), 0)::int as avg_score
+        FROM game_sessions s
+        JOIN quizzes q ON q.id = s.quiz_id
+        LEFT JOIN session_players p ON p.session_id = s.id
+        WHERE s.status = 'finished' AND q.user_id = $1
+        GROUP BY s.id, q.title
+        ORDER BY s.started_at DESC
+        LIMIT 50
+      `, [req.user.userId]);
+    }
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching history:', err);
