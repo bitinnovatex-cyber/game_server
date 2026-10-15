@@ -151,7 +151,7 @@ router.get('/users', requireAuth, requireSuperAdmin, async (req, res) => {
        FROM users
        ORDER BY created_at DESC`
     );
-    res.json({ users: result.rows });
+    res.json(result.rows);
   } catch (err) {
     console.error('Fetch users error:', err);
     res.status(500).json({ error: 'Failed to fetch users' });
